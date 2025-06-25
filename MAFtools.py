@@ -577,8 +577,9 @@ class MAFObject:
                 merged_blocks_n.append(local_merges)
                 
                 # Append to output then end loop, as there are no further blocks:
-                AlignIO.write(MultipleSeqAlignment(records), handle=open(options.out_file, 'a'), format="maf")
-                break
+                if len(records) >= options.min_seqs:
+                    AlignIO.write(MultipleSeqAlignment(records), handle=open(options.out_file, 'a'), format="maf")
+                    break
 
             merge_flag = check_block_viability(block1, block2, 
                                             options.species_consensus,
@@ -596,7 +597,8 @@ class MAFObject:
                 block1 = block2
 
                 # Append to output:
-                AlignIO.write(MultipleSeqAlignment(records), handle=open(options.out_file, 'a'), format="maf")
+                if len(records) >= options.min_seqs:
+                    AlignIO.write(MultipleSeqAlignment(records), handle=open(options.out_file, 'a'), format="maf")
 
                         
     def toBed(self, output_bed_file: str):
@@ -733,7 +735,7 @@ class MAFObject:
         # Open output file and write header
         with open(output_tsv_file, 'w') as out:
             # Write header
-            out.write("refseq\tstart\tsize\tlength\tmean_pairwise_identity\tgaps_fraction\n")
+            out.write("refseq\tstart\tsize\tlength\tseqs\tmean_pairwise_identity\tgaps_fraction\n")
             
             # Process each alignment block
             alignments = AlignIO.parse(self.maf_file, "maf")
@@ -769,7 +771,9 @@ class MAFObject:
                 
                 # Calculate average gap fraction
                 gap_fractions = []
+                seqs = 0
                 for record in alignment:
+                    seqs += 1
                     seq_str = str(record.seq)
                     gap_count = seq_str.count('-')
                     gap_fraction = gap_count / len(seq_str) if len(seq_str) > 0 else 0
@@ -778,7 +782,7 @@ class MAFObject:
                 avg_gap_fraction = sum(gap_fractions) / len(gap_fractions) if gap_fractions else 0.0
                 
                 # Write row
-                out.write(f"{refseq_name}\t{start}\t{size}\t{alignment_length}\t"
+                out.write(f"{refseq_name}\t{start}\t{size}\t{alignment_length}\t{seqs}\t"
                         f"{mean_pairwise_identity:.4f}\t{avg_gap_fraction:.4f}\n")
         
         print(f"Block description complete: {block_num} blocks processed")
