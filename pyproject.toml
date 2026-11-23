@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maftools"
+dynamic = ["version"]
+description = "Filter, cut, merge and summarise Multiple Alignment Format (MAF) files"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPLv2" }
+authors = [{ name = "Christopher Klapproth" }]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest", "biopython"]
+
+[project.scripts]
+maftools = "maftools.cli:main"
+
+[tool.hatch.version]
+path = "src/maftools/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/maftools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
