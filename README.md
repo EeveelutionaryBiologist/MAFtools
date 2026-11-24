@@ -30,10 +30,11 @@ Without installing, use `python MAFtools.py` from a checkout in place of `maftoo
 maftools [program] [options] [MAF file]
 ```
 
-Where `program` is one of: `describe`, `merge`, `filter`, `window`, `select`, `toBed`, `blockdescribe`
+Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `window`, `merge`, `toBed`, `toFasta`
 
 Results go to standard output unless `-o` is given; an existing output file is replaced.
-Progress messages go to standard error. The first sequence of each block is the reference.
+Input may be gzipped, and `-` reads from standard input, so commands can be piped.
+Output files named `*.gz` are compressed. Progress messages go to standard error. The first sequence of each block is the reference.
 
 ## Core Functionality
 
@@ -185,6 +186,52 @@ This is useful for:
 
 
 
+### 8. index
+Indexes the reference positions of an uncompressed MAF file.
+
+```bash
+maftools index alignment.maf
+```
+
+This writes `alignment.maf.mfi`. `select` uses the index automatically and gives the same output as
+without it, but reads only the blocks it needs. An index that does not fit the file is ignored
+with a warning.
+
+### 9. species
+Keeps, drops or reorders species.
+
+```bash
+maftools species -s hg38,panTro6,mm39 -o primates.maf alignment.maf
+```
+
+**Options:**
+- `-s, --species`: Comma-separated names, species (`hg38`) or full sequence names (`hg38.chr1`)
+- `-f, --list`: File with one name per line
+- `-x, --exclude`: Drop these species instead of keeping them
+- `-a, --require-all`: Keep only blocks that contain all of these species
+- `-r, --reorder`: Order sequences as given. The first species becomes the reference, on the plus
+  strand; blocks without it are dropped
+- `-n, --min-seqs`: Minimum number of sequences to write a block (default: 1)
+- `-o, --output`: Output MAF file (default: standard output)
+
+Columns left without any base are removed. With `--reorder`, blocks stay in their original order and
+may no longer be sorted by the new reference.
+
+### 10. toFasta
+Writes aligned sequences as FASTA.
+
+```bash
+maftools toFasta -c -o alignment.fa alignment.maf
+```
+
+**Options:**
+- `-c, --concatenate`: Join all blocks into one aligned record per species. Missing species are filled
+  with gaps; if a species occurs more than once in a block, its first sequence is used
+- `-u, --ungapped`: Remove gaps
+- `-o, --output`: Output FASTA file (default: standard output)
+
+Without `-c`, every sequence of every block is one record, named like `hg38.chr1:100-200(+) block=1`.
+
 ## Examples
 
 ### Extract specific genomic regions:
@@ -196,14 +243,20 @@ maftools select -b Example/test.bed -o extracted.maf Example/test.maf
 
 ### Filter alignments for quality or similarity criteria:
 ```bash
-# Keep blocks with <15% gaps, 3+ sequences, and 70-95% similarity
-maftools filter -g 0.15 -n 3 -m 0.70 -a 0.95 -o filtered.maf Example/test.maf
+# Keep blocks with at most 15% gaps, 3+ sequences and at least 70% similarity
+maftools filter -g 0.15 -n 3 -m 0.70 -o filtered.maf Example/test.maf
 ```
 
 ### Create sliding windows for analysis:
 ```bash
 # Create 100bp windows, each starting 25bp after the previous one
 maftools window -l 100 -s 25 -o windows.maf genome.maf
+```
+
+### Combine commands:
+```bash
+# Windows over three species, with the first as reference
+maftools species -r -s hg38,panTro6,mm39 genome.maf.gz | maftools filter - | maftools window -o windows.maf.gz -
 ```
 
 ## MAF Format Notes

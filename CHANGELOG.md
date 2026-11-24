@@ -26,6 +26,13 @@ Rewritten as a package with a test suite. No dependencies.
 - `toBed`, `merge`: appended to existing output files.
 - `describe`, `merge`: crashed on files without blocks.
 
+### Added
+
+- `species`: keep, drop or reorder species.
+- `toFasta`: aligned or ungapped FASTA, per block or concatenated by species.
+- `index`: random access for `select`.
+- Gzipped input and output, and standard input.
+
 ### Changed
 
 - Output goes to standard output unless `-o` is given, messages to standard error.
