@@ -10,6 +10,11 @@ from dataclasses import dataclass, field, replace
 
 GAP = "-"
 
+_BASES, _COMPLEMENTS = "ACGTURYKMBDHV", "TGCAAYRMKVHDB"
+_COMPLEMENT = str.maketrans(
+    _BASES + _BASES.lower(), _COMPLEMENTS + _COMPLEMENTS.lower()
+)
+
 
 def count_bases(text: str) -> int:
     """Number of non-gap characters in an aligned sequence."""
@@ -61,6 +66,17 @@ class Row:
             return start, end
         return self.src_size - end, self.src_size - start
 
+    def reverse_complement(self) -> Row:
+        """The same bases, described from the other strand."""
+        return replace(
+            self,
+            start=self.src_size - self.end,
+            strand="-" if self.strand == "+" else "+",
+            text=self.text.translate(_COMPLEMENT)[::-1],
+            quality=None if self.quality is None else self.quality[::-1],
+            info=None,
+        )
+
     def sliced(self, first: int, last: int) -> Row:
         """Columns ``first:last``, with start and size adjusted to match."""
         text = self.text[first:last]
@@ -99,6 +115,9 @@ class Block:
         attrs = {k: v for k, v in self.attrs.items() if k != "score"}
         return Block([replace(row, info=None) for row in rows], attrs)
 
+    def reverse_complement(self) -> Block:
+        return self.derived([row.reverse_complement() for row in self.rows])
+
     def sliced(self, first: int, last: int) -> Block | None:
         """Columns ``first:last``; rows without any base there are dropped.
 
@@ -114,13 +133,15 @@ class Block:
 
     def without_gap_columns(self) -> Block:
         """Remove columns in which every row has a gap."""
-        texts = [row.text for row in self.rows]
-        keep = [any(c != GAP for c in column) for column in zip(*texts)]
-        if all(keep):
+        empty = [i for i, c in enumerate(self.reference.text) if c == GAP]
+        for row in self.rows[1:]:
+            empty = [i for i in empty if row.text[i] == GAP]
+        if not empty:
             return self
 
         def squeeze(text: str) -> str:
-            return "".join(c for c, kept in zip(text, keep) if kept)
+            edges = [-1, *empty, len(text)]
+            return "".join(text[a + 1 : b] for a, b in zip(edges, edges[1:]))
 
         return self.derived(
             [

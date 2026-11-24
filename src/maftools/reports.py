@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Iterator
 
-from .blocks import Block
+from .blocks import GAP, Block
 from .metrics import mean_gap_fraction, reference_identities
 
 BLOCK_COLUMNS = (
@@ -52,3 +53,47 @@ def bed_lines(blocks: Iterable[Block]) -> Iterator[str]:
     for block in blocks:
         start, end = block.reference.plus_interval()
         yield f"{block.reference.src}\t{start}\t{end}"
+
+
+def _fasta(name: str, text: str, width: int = 60) -> Iterator[str]:
+    yield f">{name}"
+    for i in range(0, len(text), width):
+        yield text[i : i + width]
+
+
+def fasta_blocks(blocks: Iterable[Block], ungapped: bool = False) -> Iterator[str]:
+    """Every row as a FASTA record, named by its plus-strand interval.
+
+    Sequences are written as aligned, so minus-strand rows are the reverse
+    complement of the interval in their name, as the ``(-)`` says.
+    """
+    for number, block in enumerate(blocks, 1):
+        for row in block.rows:
+            start, end = row.plus_interval()
+            text = row.text.replace(GAP, "") if ungapped else row.text
+            yield from _fasta(f"{row.src}:{start}-{end}({row.strand}) block={number}", text)
+
+
+def fasta_concatenated(blocks: Iterable[Block], stats: Counter | None = None) -> Iterator[str]:
+    """One aligned record per species, with all blocks joined in file order.
+
+    Species missing from a block are filled with gaps. If a species occurs more
+    than once in a block, its first row is used.
+    """
+    stats = Counter() if stats is None else stats
+    parts: dict[str, list[str]] = {}
+    lengths: Counter = Counter()
+    total = 0
+    for block in blocks:
+        used = set()
+        for row in block.rows:
+            if row.species in used:
+                stats["duplicates"] += 1
+                continue
+            used.add(row.species)
+            padding = GAP * (total - lengths[row.species])
+            parts.setdefault(row.species, []).extend((padding, row.text))
+            lengths[row.species] = total + block.columns
+        total += block.columns
+    for species, texts in parts.items():
+        yield from _fasta(species, "".join(texts) + GAP * (total - lengths[species]))

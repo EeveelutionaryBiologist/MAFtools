@@ -1,10 +1,11 @@
+import gzip
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from maftools import __version__
+from maftools import __version__, cli
 from maftools.cli import main
 from maftools.mafio import MafReader
 
@@ -114,3 +115,126 @@ def test_script_runs_from_checkout():
     done = subprocess.run([sys.executable, ROOT / "MAFtools.py", "describe", MAF],
                           capture_output=True, text=True)
     assert done.returncode == 0 and "Number of blocks: 4" in done.stdout
+
+
+# --- compression, pipes, index ----------------------------------------------
+
+def shell(*argv, stdin=b""):
+    return subprocess.run([sys.executable, ROOT / "MAFtools.py", *map(str, argv)],
+                          input=stdin, capture_output=True)
+
+
+def test_gzip_input_and_output(capsys, tmp_path):
+    packed = tmp_path / "any_name"
+    packed.write_bytes(gzip.compress(Path(MAF).read_bytes()))
+    plain = run(capsys, "describe", MAF)[1]
+    assert run(capsys, "describe", packed)[1] == plain
+    out = tmp_path / "o.maf.gz"
+    run(capsys, "window", "-o", out, packed)
+    assert gzip.decompress(out.read_bytes()).decode() == run(capsys, "window", MAF)[1]
+    assert out.read_bytes()[4:8] == bytes(4)  # no time stamp: output is reproducible
+
+
+def test_multi_member_gzip(capsys, tmp_path):
+    data = Path(MAF).read_bytes()
+    packed = tmp_path / "x.maf.gz"
+    packed.write_bytes(gzip.compress(data[:3000]) + gzip.compress(data[3000:]))
+    assert run(capsys, "describe", packed)[1] == run(capsys, "describe", MAF)[1]
+
+
+def test_damaged_gzip_is_an_error(capsys, tmp_path):
+    packed = tmp_path / "x.maf.gz"
+    data = gzip.compress(Path(MAF).read_bytes())
+    for bad in (data[: len(data) // 2], data[:200] + bytes(100) + data[300:]):
+        packed.write_bytes(bad)
+        code, _, err = run(capsys, "describe", packed)
+        assert code == 1 and "error" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize("pack", [bytes, gzip.compress])
+def test_standard_input(capsys, pack):
+    done = shell("window", "-l", "40", "-", stdin=pack(Path(MAF).read_bytes()))
+    assert done.returncode == 0
+    assert done.stdout.decode() == run(capsys, "window", "-l", "40", MAF)[1]
+
+
+def test_bed_from_standard_input(capsys):
+    done = shell("select", "-b", "-", MAF, stdin=Path(BED).read_bytes())
+    assert done.stdout.decode() == run(capsys, "select", "-b", BED, MAF)[1]
+    assert shell("select", "-b", "-", "-").returncode == 2
+
+
+def test_closed_pipe_is_quiet():
+    command = f"'{sys.executable}' '{ROOT / 'MAFtools.py'}' window -l 5 -s 1 '{MAF}' | head -1"
+    done = subprocess.run(command, shell=True, capture_output=True, text=True)
+    assert done.stdout == "##maf version=1\n" and done.stderr == ""
+
+
+def test_index_is_used_and_checked(capsys, tmp_path, monkeypatch):
+    maf = tmp_path / "x.maf"
+    maf.write_text(Path(MAF).read_text())
+    plain = run(capsys, "select", "-l", "5", "-b", BED, maf)
+    assert run(capsys, "index", maf)[0] == 0
+    assert run(capsys, "select", "-l", "5", "-b", BED, maf) == plain
+
+    calls = []
+    original = cli.MafIndex.blocks
+    monkeypatch.setattr(cli.MafIndex, "blocks",
+                        lambda *a: calls.append(1) or original(*a))
+    run(capsys, "select", "-b", BED, maf)
+    assert calls == [1]
+
+    maf.write_text(maf.read_text() + "\n")
+    code, out, err = run(capsys, "select", "-l", "5", "-b", BED, maf)
+    assert out == plain[1] and "out of date" in err and calls == [1]
+
+
+def test_flanks_reach_blocks_through_the_index(capsys, tmp_path):
+    maf, bed = tmp_path / "x.maf", tmp_path / "x.bed"
+    maf.write_text(Path(MAF).read_text())
+    bed.write_text("NC_037638.1\t2006350\t2006360\n")  # 3 bases after a block
+    run(capsys, "index", maf)
+    assert len(blocks(run(capsys, "select", "-l", "5", "-b", bed, maf)[1])) == 1
+
+
+def test_damaged_index_is_ignored(capsys, tmp_path):
+    maf = tmp_path / "x.maf"
+    maf.write_text(Path(MAF).read_text())
+    Path(str(maf) + ".mfi").write_text("not a database, but long enough to look like one" * 50)
+    code, out, err = run(capsys, "select", "-b", BED, maf)
+    assert code == 0 and len(blocks(out)) == 4 and "not used" in err
+
+
+# --- species and FASTA ------------------------------------------------------
+
+def test_species(capsys, tmp_path):
+    names = tmp_path / "names.txt"
+    names.write_text("# keep\nBombus_terrestris\n\n")
+    code, out, err = run(capsys, "species", "-s", "NC_037638", "-f", names, "-s", "Nobody", MAF)
+    assert code == 0 and "not found: Nobody" in err
+    assert {row.species for b in blocks(out) for row in b.rows} == {"NC_037638",
+                                                                    "Bombus_terrestris"}
+    assert "lost their reference" in run(capsys, "species", "-s", "Bombus_terrestris", MAF)[2]
+    reordered = blocks(run(capsys, "species", "-r", "-s", "Bombus_terrestris,NC_037638", MAF)[1])
+    assert {(b.reference.species, b.reference.strand) for b in reordered} == {
+        ("Bombus_terrestris", "+")}
+    assert run(capsys, "species", MAF)[0] == 1
+    with pytest.raises(SystemExit):
+        main(["species", "-x", "-r", "-s", "a", MAF])
+
+
+def test_list_is_not_overwritten(capsys, tmp_path):
+    names = tmp_path / "names.txt"
+    names.write_text("NC_037638\n")
+    assert run(capsys, "species", "-f", names, "-o", names, MAF)[0] == 1
+    assert names.read_text() == "NC_037638\n"
+
+
+def test_to_fasta(capsys):
+    assert run(capsys, "toFasta", MAF)[1].count(">") == 37
+    out = run(capsys, "toFasta", "-c", MAF)[1]
+    assert out.count(">") == 13
+    ungapped = run(capsys, "toFasta", "-u", MAF)[1].splitlines()
+    assert not any("-" in line for line in ungapped if not line.startswith(">"))
+    lengths = {sum(map(len, r.split("\n")[1:])) for r in out.split(">")[1:]}
+    assert lengths == {309}

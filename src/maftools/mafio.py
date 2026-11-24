@@ -26,8 +26,9 @@ class MafReader:
     unknown type are ignored, as the MAF specification asks.
     """
 
-    def __init__(self, handle: TextIO, name: str = "<maf>"):
+    def __init__(self, handle: Iterable[str], name: str = "<maf>"):
         self.name = name
+        self.block_line = 0  # line number of the block yielded last
         self.header: list[str] = []
         self._lines = enumerate(handle, 1)
         self._first: list[tuple[int, str]] = []
@@ -43,13 +44,16 @@ class MafReader:
 
     def __iter__(self) -> Iterator[Block]:
         block: Block | None = None
+        line_of_block = 0
         for number, line in chain(self._first, self._lines):
             fields = line.split()
             if not fields or fields[0] == "a":
                 if block is not None and block.rows:
+                    self.block_line = line_of_block
                     yield block
                 block = None
                 if fields:
+                    line_of_block = number
                     attrs = (f.partition("=") for f in fields[1:])
                     block = Block(attrs={k: v if eq else None for k, eq, v in attrs})
             elif fields[0].startswith("#"):
@@ -63,6 +67,7 @@ class MafReader:
             elif fields[0] == "e":
                 block.empties.append(" ".join(fields[1:]))
         if block is not None and block.rows:
+            self.block_line = line_of_block
             yield block
 
     def _row(self, number: int, fields: list[str], block: Block) -> Row:

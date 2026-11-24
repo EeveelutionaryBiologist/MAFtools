@@ -29,6 +29,11 @@ def reference_columns(row: Row, start: int, end: int) -> tuple[int, int]:
     return first, column_of_base(row.text, end - row.start)
 
 
+def widen(intervals: Iterable[Interval], left: int, right: int) -> list[Interval]:
+    """Add flanks on the plus strand."""
+    return [Interval(c, max(0, s - left), e + right) for c, s, e in intervals]
+
+
 def select_blocks(
     blocks: Iterable[Block],
     intervals: Iterable[Interval],
@@ -41,7 +46,7 @@ def select_blocks(
     Flanks extend intervals on the plus strand; the BED strand is not used.
     """
     stats = Counter() if stats is None else stats
-    widened = [Interval(c, max(0, s - left), e + right) for c, s, e in intervals]
+    widened = widen(intervals, left, right)
     index = IntervalIndex(widened)
     matched: set[int] = set()
     stats["intervals"] = len(widened)
@@ -86,6 +91,64 @@ def filter_blocks(
     for block in blocks:
         stats["read"] += 1
         if criteria.accepts(block):
+            stats["kept"] += 1
+            yield block
+
+
+# --- species ----------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SpeciesOptions:
+    """Names are species (``hg38``) or full sequence names (``hg38.chr1``)."""
+
+    names: tuple[str, ...]
+    exclude: bool = False
+    require_all: bool = False
+    reorder: bool = False  # rows in the order of names; the first is the reference
+    min_seqs: int = 1
+
+    def rank(self, row: Row) -> int | None:
+        """Position of the first name that matches a row."""
+        for i, name in enumerate(self.names):
+            if name in (row.species, row.src):
+                return i
+        return None
+
+
+def species_blocks(
+    blocks: Iterable[Block],
+    options: SpeciesOptions,
+    stats: Counter | None = None,
+    seen: set[str] | None = None,
+) -> Iterator[Block]:
+    """Keep, drop or reorder rows. Columns left without any base are removed.
+
+    With ``reorder``, the first name becomes the reference: blocks without it are
+    dropped and blocks with it on the minus strand are reverse-complemented.
+    ``seen`` collects the names that matched any row.
+    """
+    stats = Counter() if stats is None else stats
+    seen = set() if seen is None else seen
+    for block in blocks:
+        stats["read"] += 1
+        ranks = [options.rank(row) for row in block.rows]
+        found = {rank for rank in ranks if rank is not None}
+        seen.update(options.names[rank] for rank in found)
+        if options.require_all and len(found) < len(options.names):
+            continue
+        if options.reorder and 0 not in found:
+            continue
+        kept = [i for i, rank in enumerate(ranks) if (rank is None) == options.exclude]
+        if options.reorder:
+            kept.sort(key=lambda i: ranks[i])
+        if not kept or len(kept) < options.min_seqs:
+            continue
+        if kept != list(range(len(ranks))):
+            stats["changed_reference"] += kept[0] != 0
+            block = block.derived([block.rows[i] for i in kept]).without_gap_columns()
+        if options.reorder and block.reference.strand == "-":
+            block = block.reverse_complement()
+        if block.reference.size:
             stats["kept"] += 1
             yield block
 
