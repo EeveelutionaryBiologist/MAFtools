@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 from .bed import Interval, IntervalIndex
 from .blocks import GAP, Block, Row, column_of_base
-from .metrics import mean_gap_fraction, reference_identities
+from .metrics import mean_gap_fraction, pairwise_identity, reference_identities
 
 
 # --- select -----------------------------------------------------------------
@@ -151,6 +151,58 @@ def species_blocks(
         if block.reference.size:
             stats["kept"] += 1
             yield block
+
+
+# --- dedup ------------------------------------------------------------------
+
+KEEP_BEST, KEEP_FIRST, KEEP_NONE = "best", "first", "none"
+
+
+def _copies_to_keep(block: Block, copies: list[int], keep: str) -> list[int]:
+    """Which of several rows of one species stay. The reference always wins."""
+    if keep == KEEP_NONE:
+        return []
+    if keep == KEEP_FIRST or copies[0] == 0:
+        return copies[:1]
+    ref = block.reference.text
+    # max() returns the first of equally good copies
+    return [max(copies, key=lambda i: pairwise_identity(ref, block.rows[i].text))]
+
+
+def dedup_blocks(
+    blocks: Iterable[Block],
+    keep: str = KEEP_BEST,
+    min_seqs: int = 1,
+    stats: Counter | None = None,
+) -> Iterator[Block]:
+    """Reduce blocks to at most one row per species.
+
+    ``best`` keeps the copy most similar to the reference, ``first`` the first one,
+    and ``none`` drops all copies. With ``none``, blocks in which the species of the
+    reference is duplicated are dropped. Columns left without any base are removed.
+    """
+    if keep not in (KEEP_BEST, KEEP_FIRST, KEEP_NONE):
+        raise ValueError(f"unknown value for keep: {keep!r}")
+    stats = Counter() if stats is None else stats
+    for block in blocks:
+        stats["read"] += 1
+        species: dict[str, list[int]] = {}
+        for i, row in enumerate(block.rows):
+            species.setdefault(row.species, []).append(i)
+        kept: list[int] = []
+        for copies in species.values():
+            kept += copies if len(copies) == 1 else _copies_to_keep(block, copies, keep)
+        kept.sort()
+        removed = len(block.rows) - len(kept)
+        stats["affected"] += removed > 0
+        if 0 not in kept or len(kept) < min_seqs:
+            stats["dropped"] += 1
+            continue
+        if removed:
+            stats["removed"] += removed
+            block = block.derived([block.rows[i] for i in kept]).without_gap_columns()
+        stats["kept"] += 1
+        yield block
 
 
 # --- window -----------------------------------------------------------------

@@ -30,7 +30,7 @@ Without installing, use `python MAFtools.py` from a checkout in place of `maftoo
 maftools [program] [options] [MAF file]
 ```
 
-Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `window`, `merge`, `toBed`, `toFasta`
+Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `window`, `merge`, `toBed`, `toFasta`
 
 Results go to standard output unless `-o` is given; an existing output file is replaced.
 Input may be gzipped, and `-` reads from standard input, so commands can be piped.
@@ -226,11 +226,29 @@ maftools toFasta -c -o alignment.fa alignment.maf
 
 **Options:**
 - `-c, --concatenate`: Join all blocks into one aligned record per species. Missing species are filled
-  with gaps; if a species occurs more than once in a block, its first sequence is used
+  with gaps; if a species occurs more than once in a block, its first sequence is used (see `dedup`)
 - `-u, --ungapped`: Remove gaps
 - `-o, --output`: Output FASTA file (default: standard output)
 
 Without `-c`, every sequence of every block is one record, named like `hg38.chr1:100-200(+) block=1`.
+
+### 11. dedup
+Reduces blocks to at most one sequence per species, for example where a species has paralogs.
+
+```bash
+maftools dedup -k best -o single.maf alignment.maf
+```
+
+**Options:**
+- `-k, --keep`: Which copy to keep (default: best)
+  - `best`: the one most similar to the reference; the first one if several are equal
+  - `first`: the first one
+  - `none`: none of them. Blocks in which the reference species is duplicated are dropped
+- `-n, --min-seqs`: Minimum number of sequences to write a block (default: 1)
+- `-o, --output`: Output MAF file (default: standard output)
+
+The species is the part of the name before the first dot. The reference is never replaced by another
+copy. Columns left without any base are removed. Regions that occur in several blocks are not detected.
 
 ## Examples
 

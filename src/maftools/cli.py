@@ -19,8 +19,8 @@ from .files import STDIO, open_input, open_output
 from .index import MafIndex, build_index, index_path
 from .mafio import MafError, MafReader, write_maf
 from .operations import (
-    FilterCriteria, MergeOptions, SpeciesOptions, filter_blocks, merge_blocks, select_blocks,
-    species_blocks, widen, window_blocks,
+    KEEP_BEST, KEEP_FIRST, KEEP_NONE, FilterCriteria, MergeOptions, SpeciesOptions, dedup_blocks,
+    filter_blocks, merge_blocks, select_blocks, species_blocks, widen, window_blocks,
 )
 from .reports import bed_lines, block_table, describe, fasta_blocks, fasta_concatenated
 
@@ -95,7 +95,8 @@ def _to_fasta(args: argparse.Namespace, reader: MafReader) -> None:
     stats: Counter = Counter()
     _write_lines(args, fasta_concatenated(reader, stats))
     if stats["duplicates"]:
-        _note(f"{stats['duplicates']} additional rows of a species in the same block not used")
+        _note(f"{stats['duplicates']} additional rows of a species in the same block not used "
+              "(see dedup)")
 
 
 def _index(args: argparse.Namespace, reader: MafReader) -> None:
@@ -150,6 +151,15 @@ def _species(args: argparse.Namespace, reader: MafReader) -> None:
     missing = [name for name in names if name not in seen]
     if missing:
         _note(f"warning: not found: {', '.join(missing)}")
+
+
+def _dedup(args: argparse.Namespace, reader: MafReader) -> None:
+    stats: Counter = Counter()
+    _write(args, dedup_blocks(reader, args.keep, args.min_seqs, stats), reader)
+    _note(
+        f"{stats['affected']} of {stats['read']} blocks had duplicates; "
+        f"{stats['removed']} sequences removed, {stats['dropped']} blocks dropped"
+    )
 
 
 def _filter(args: argparse.Namespace, reader: MafReader) -> None:
@@ -245,6 +255,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("-r", "--reorder", action="store_true",
                      help="order sequences as given and make the first species the reference, "
                      "on the plus strand; blocks without it are dropped")
+    sub.add_argument("-n", "--min-seqs", type=_at_least(1), default=1, metavar="N",
+                     help="minimum number of sequences to write a block")
+
+    sub = command("dedup", _dedup, "Reduce blocks to one sequence per species.")
+    sub.add_argument("-k", "--keep", choices=(KEEP_BEST, KEEP_FIRST, KEEP_NONE),
+                     default=KEEP_BEST,
+                     help="which copy to keep: the one most similar to the reference, the first "
+                     "one, or none of them")
     sub.add_argument("-n", "--min-seqs", type=_at_least(1), default=1, metavar="N",
                      help="minimum number of sequences to write a block")
 

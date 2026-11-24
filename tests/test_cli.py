@@ -238,3 +238,16 @@ def test_to_fasta(capsys):
     assert not any("-" in line for line in ungapped if not line.startswith(">"))
     lengths = {sum(map(len, r.split("\n")[1:])) for r in out.split(">")[1:]}
     assert lengths == {309}
+
+
+def test_dedup(capsys, tmp_path):
+    maf = tmp_path / "d.maf"
+    maf.write_text("a\ns x.1 0 4 + 9 ACGT\ns y.1 0 4 + 9 TTTT\ns y.2 0 4 + 9 ACGA\n")
+    code, out, err = run(capsys, "dedup", maf)
+    assert code == 0 and [r.src for r in blocks(out)[0].rows] == ["x.1", "y.2"]
+    assert err == ("1 of 1 blocks had duplicates; 1 sequences removed, 0 blocks dropped\n")
+    assert [r.src for r in blocks(run(capsys, "dedup", "-k", "first", maf)[1])[0].rows] == [
+        "x.1", "y.1"]
+    assert len(blocks(run(capsys, "dedup", "-k", "none", maf)[1])[0].rows) == 1
+    assert blocks(run(capsys, "dedup", "-n", "3", maf)[1]) == []
+    assert "see dedup" in run(capsys, "toFasta", "-c", maf)[2]
