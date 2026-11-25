@@ -6,7 +6,7 @@ format is handled here directly. One block is held in memory at a time.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from itertools import chain
 from typing import TextIO
 
@@ -18,16 +18,25 @@ DEFAULT_HEADER = "##maf version=1"
 class MafError(ValueError):
     """Malformed input."""
 
+    def __init__(self, message: str, line: int = 0):
+        super().__init__(message)
+        self.line = line
+        self.reason = message
+
 
 class MafReader:
     """Iterate over the blocks of a MAF file.
 
     ``header`` holds the comment lines that precede the first block. Lines of
     unknown type are ignored, as the MAF specification asks.
+
+    If ``on_error`` is set, it receives the errors of malformed lines, which are
+    then skipped. Otherwise the first error is raised.
     """
 
     def __init__(self, handle: Iterable[str], name: str = "<maf>"):
         self.name = name
+        self.on_error: Callable[[MafError], None] | None = None
         self.block_line = 0  # line number of the block yielded last
         self.header: list[str] = []
         self._lines = enumerate(handle, 1)
@@ -40,7 +49,9 @@ class MafReader:
                 break
 
     def _error(self, number: int, message: str) -> MafError:
-        return MafError(f"{self.name}:{number}: {message}")
+        error = MafError(f"{self.name}:{number}: {message}", number)
+        error.reason = message
+        return error
 
     def __iter__(self) -> Iterator[Block]:
         block: Block | None = None
@@ -59,16 +70,27 @@ class MafReader:
             elif fields[0].startswith("#"):
                 continue
             elif block is None:
-                raise self._error(number, "expected an alignment block ('a' line)")
+                self._handle(self._error(number, "expected an alignment block ('a' line)"))
             elif fields[0] == "s":
-                block.rows.append(self._row(number, fields, block))
+                try:
+                    block.rows.append(self._row(number, fields, block))
+                except MafError as error:
+                    self._handle(error)
             elif fields[0] in ("i", "q"):
-                self._annotate(number, fields, block)
+                try:
+                    self._annotate(number, fields, block)
+                except MafError as error:
+                    self._handle(error)
             elif fields[0] == "e":
                 block.empties.append(" ".join(fields[1:]))
         if block is not None and block.rows:
             self.block_line = line_of_block
             yield block
+
+    def _handle(self, error: MafError) -> None:
+        if self.on_error is None:
+            raise error
+        self.on_error(error)
 
     def _row(self, number: int, fields: list[str], block: Block) -> Row:
         if len(fields) != 7:

@@ -15,6 +15,7 @@ from typing import TextIO
 from . import __version__
 from .bed import read_bed
 from .blocks import Block
+from .fasta import Genomes
 from .files import STDIO, open_input, open_output
 from .index import MafIndex, build_index, index_path
 from .mafio import MafError, MafReader, write_maf
@@ -23,6 +24,7 @@ from .operations import (
     filter_blocks, merge_blocks, select_blocks, species_blocks, widen, window_blocks,
 )
 from .reports import bed_lines, block_table, describe, fasta_blocks, fasta_concatenated
+from .verify import HEADER, verify
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -54,7 +56,8 @@ def _at_least(minimum: int):
 def _output(args: argparse.Namespace) -> Iterator[TextIO]:
     """The -o file, or stdout. Refuses to overwrite a file that is being read."""
     if args.output not in (None, STDIO) and os.path.exists(args.output):
-        for path in (args.maf, getattr(args, "bed", None), getattr(args, "list", None)):
+        inputs = [args.maf, getattr(args, "bed", None), getattr(args, "list", None)]
+        for path in inputs + getattr(args, "genome_files", []):
             if path not in (None, STDIO) and os.path.samefile(path, args.output):
                 raise MafError(f"{args.output} is also an input file")
     with open_output(args.output) as handle:
@@ -180,6 +183,44 @@ def _window(args: argparse.Namespace, reader: MafReader) -> None:
     )
 
 
+def _verify(args: argparse.Namespace, reader: MafReader) -> int:
+    """Exit status 1 if there are problems, or if nothing could be checked."""
+    genomes = Genomes()
+    for item in args.genome:
+        species, equals, path = item.partition("=")
+        if equals and not os.path.exists(item):
+            genomes.add(path, species)
+        else:
+            genomes.add(item)
+    for directory in args.directory:
+        if not genomes.add_directory(directory):
+            _note(f"warning: no FASTA files in {directory}")
+    args.genome_files = [fasta.path for fasta in genomes.files()]
+    stats: Counter = Counter()
+    unknown: Counter = Counter()
+    kinds: Counter = Counter()
+
+    def lines() -> Iterator[str]:
+        yield "\t".join(HEADER)
+        for problem in verify(reader, genomes, stats, unknown):
+            kinds[problem.problem] += 1
+            yield "\t".join(map(str, problem))
+
+    _write_lines(args, lines())
+    genomes.close()
+    _note(f"{stats['checked']} sequences checked, {stats['problems']} with problems")
+    for kind, count in kinds.most_common():
+        _note(f"  {kind}: {count}")
+    if unknown:
+        names = ", ".join(list(unknown)[:5]) + (", ..." if len(unknown) > 5 else "")
+        _note(f"warning: {sum(unknown.values())} sequences not checked, "
+              f"no genome for {len(unknown)} names: {names}")
+    if not stats["checked"]:
+        _note("error: nothing was checked")
+        return 1
+    return 1 if stats["problems"] else 0
+
+
 def _merge(args: argparse.Namespace, reader: MafReader) -> None:
     options = MergeOptions(
         args.species_consensus, args.max_distance, args.max_length, args.max_gaps,
@@ -288,6 +329,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("-r", "--no-reference", dest="reference", action="store_false",
                      help="apply --max-gaps to the first sequence as well")
 
+    sub = command("verify", _verify, "Check alignments against genome sequences.")
+    sub.add_argument("-g", "--genome", action="append", default=[], metavar="[SPECIES=]FILE",
+                     help="uncompressed FASTA file, of one species or with full sequence names; "
+                     "can be repeated")
+    sub.add_argument("-d", "--directory", action="append", default=[], metavar="DIR",
+                     help="directory with one FASTA file per species, named SPECIES.fa; "
+                     "can be repeated")
+
     for sub in commands.choices.values():
         sub.add_argument("maf", metavar="MAF", help="input file, may be gzipped; - for standard input")
     return parser
@@ -298,6 +347,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "window" and args.step > args.length:
         parser.error("--step must not exceed --length")
+    if args.command == "verify" and not (args.genome or args.directory):
+        parser.error("verify needs --genome or --directory")
     if args.command == "species" and args.exclude and (args.reorder or args.require_all):
         parser.error("--exclude cannot be combined with --reorder or --require-all")
     side_inputs = (getattr(args, "bed", None), getattr(args, "list", None))
@@ -305,8 +356,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("only one input can be read from standard input")
     try:
         with open_input(args.maf) as handle:
-            args.run(args, MafReader(handle, args.maf))
+            status = args.run(args, MafReader(handle, args.maf))
         sys.stdout.flush()
+        return status or 0
     except BrokenPipeError:  # e.g. piped into head
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
     except UnicodeDecodeError:

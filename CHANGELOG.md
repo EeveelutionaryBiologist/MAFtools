@@ -32,6 +32,7 @@ Rewritten as a package with a test suite. No dependencies.
 - `dedup`: at most one sequence per species in each block.
 - `toFasta`: aligned or ungapped FASTA, per block or concatenated by species.
 - `index`: random access for `select`.
+- `verify`: checks alignments against genome sequences.
 - Gzipped input and output, and standard input.
 
 ### Changed

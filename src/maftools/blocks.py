@@ -21,6 +21,11 @@ def count_bases(text: str) -> int:
     return len(text) - text.count(GAP)
 
 
+def reverse_complement(text: str) -> str:
+    """Keeps case, gaps and IUPAC codes."""
+    return text.translate(_COMPLEMENT)[::-1]
+
+
 def column_of_base(text: str, index: int) -> int:
     """Column holding the ``index``-th (0-based) non-gap character."""
     seen = 0
@@ -72,7 +77,7 @@ class Row:
             self,
             start=self.src_size - self.end,
             strand="-" if self.strand == "+" else "+",
-            text=self.text.translate(_COMPLEMENT)[::-1],
+            text=reverse_complement(self.text),
             quality=None if self.quality is None else self.quality[::-1],
             info=None,
         )

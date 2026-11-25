@@ -30,7 +30,7 @@ Without installing, use `python MAFtools.py` from a checkout in place of `maftoo
 maftools [program] [options] [MAF file]
 ```
 
-Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `window`, `merge`, `toBed`, `toFasta`
+Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `window`, `merge`, `toBed`, `toFasta`, `verify`
 
 Results go to standard output unless `-o` is given; an existing output file is replaced.
 Input may be gzipped, and `-` reads from standard input, so commands can be piped.
@@ -249,6 +249,34 @@ maftools dedup -k best -o single.maf alignment.maf
 
 The species is the part of the name before the first dot. The reference is never replaced by another
 copy. Columns left without any base are removed. Regions that occur in several blocks are not detected.
+
+### 12. verify
+Checks every base of an alignment against the genomes it was made from. This finds wrong coordinates,
+strands and sizes in MAF files from any program.
+
+```bash
+maftools verify -d genomes/ alignment.maf
+maftools verify -g hg38=hg38.fa -g mm39=mouse.fa alignment.maf
+```
+
+**Options:**
+- `-g, --genome`: FASTA file. `SPECIES=FILE` holds one species, with sequences named as in the MAF file
+  (`hg38.chr1`) or without the species (`chr1`). Without `SPECIES=`, names must match in full
+- `-d, --directory`: Directory with one file per species, named `SPECIES.fa` (or `.fasta`, `.fna`)
+- `-o, --output`: Output TSV file (default: standard output)
+
+Both options can be repeated. FASTA files must be uncompressed; a `.fai` index is used if present.
+
+**Reported problems:**
+- `format`: malformed line
+- `srcSize`, `range`: the source size is wrong, or the row ends outside of the sequence
+- `strand`: the bases fit the other strand
+- `start`: the start is shifted by up to 10 bases, or counts from the other end of the sequence
+- `orientation`: the bases are the reverse complement
+- `bases`: other differences
+
+`N` in the alignment stands for any base. The exit status is 0 if all checked sequences are correct,
+and 1 if there are problems or nothing could be checked.
 
 ## Examples
 
