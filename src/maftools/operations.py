@@ -31,7 +31,7 @@ def reference_columns(row: Row, start: int, end: int) -> tuple[int, int]:
 
 def widen(intervals: Iterable[Interval], left: int, right: int) -> list[Interval]:
     """Add flanks on the plus strand."""
-    return [Interval(c, max(0, s - left), e + right) for c, s, e in intervals]
+    return [iv._replace(start=max(0, iv.start - left), end=iv.end + right) for iv in intervals]
 
 
 def select_blocks(
@@ -40,10 +40,12 @@ def select_blocks(
     left: int = 0,
     right: int = 0,
     stats: Counter | None = None,
+    stranded: bool = False,
 ) -> Iterator[Block]:
     """Extract the parts of blocks that overlap intervals on the reference.
 
-    Flanks extend intervals on the plus strand; the BED strand is not used.
+    With ``stranded``, the reference is written on the strand of the interval.
+    Flanks always refer to the plus strand.
     """
     stats = Counter() if stats is None else stats
     widened = widen(intervals, left, right)
@@ -56,6 +58,9 @@ def select_blocks(
             first, last = reference_columns(ref, *ref.to_strand(start, end))
             part = block.sliced(first, last)
             if part is not None:
+                strand = widened[order].strand
+                if stranded and strand in ("+", "-") and part.reference.strand != strand:
+                    part = part.reverse_complement()
                 matched.add(order)
                 stats["matched"] = len(matched)
                 yield part

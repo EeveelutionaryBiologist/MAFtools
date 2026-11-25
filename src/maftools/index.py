@@ -118,7 +118,7 @@ class MafIndex:
             for name in chrom_names(src):
                 by_name.setdefault(name, []).append((source, longest))
         found: set[int] = set()
-        for chrom, start, end in intervals:
+        for chrom, start, end, *_ in intervals:
             for source, longest in by_name.get(chrom, ()):
                 found.update(
                     offset

@@ -55,7 +55,7 @@ def bed_lines(blocks: Iterable[Block]) -> Iterator[str]:
         yield f"{block.reference.src}\t{start}\t{end}"
 
 
-def _fasta(name: str, text: str, width: int = 60) -> Iterator[str]:
+def fasta_record(name: str, text: str, width: int = 60) -> Iterator[str]:
     yield f">{name}"
     for i in range(0, len(text), width):
         yield text[i : i + width]
@@ -71,7 +71,7 @@ def fasta_blocks(blocks: Iterable[Block], ungapped: bool = False) -> Iterator[st
         for row in block.rows:
             start, end = row.plus_interval()
             text = row.text.replace(GAP, "") if ungapped else row.text
-            yield from _fasta(f"{row.src}:{start}-{end}({row.strand}) block={number}", text)
+            yield from fasta_record(f"{row.src}:{start}-{end}({row.strand}) block={number}", text)
 
 
 def fasta_concatenated(blocks: Iterable[Block], stats: Counter | None = None) -> Iterator[str]:
@@ -96,4 +96,4 @@ def fasta_concatenated(blocks: Iterable[Block], stats: Counter | None = None) ->
             lengths[row.species] = total + block.columns
         total += block.columns
     for species, texts in parts.items():
-        yield from _fasta(species, "".join(texts) + GAP * (total - lengths[species]))
+        yield from fasta_record(species, "".join(texts) + GAP * (total - lengths[species]))

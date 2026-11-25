@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from typing import TextIO
 
 from . import __version__
-from .bed import read_bed
+from .bed import Interval, read_bed
 from .blocks import Block
 from .fasta import Genomes
 from .files import STDIO, open_input, open_output
@@ -24,7 +24,10 @@ from .operations import (
     dedup_blocks, filter_blocks, merge_blocks, select_blocks, species_blocks, thin_blocks, widen,
     window_blocks,
 )
-from .reports import bed_lines, block_table, describe, fasta_blocks, fasta_concatenated
+from .reports import (
+    bed_lines, block_table, describe, fasta_blocks, fasta_concatenated, fasta_record,
+)
+from .stitch import Stitched, file_names, stitch
 from .verify import HEADER, verify
 
 
@@ -119,19 +122,63 @@ def _open_index(args: argparse.Namespace) -> MafIndex | None:
     return None
 
 
-def _select(args: argparse.Namespace, reader: MafReader) -> None:
+@contextmanager
+def _blocks_near(
+    args: argparse.Namespace, reader: MafReader, intervals: list[Interval]
+) -> Iterator[Iterable[Block]]:
+    """The blocks overlapping intervals if there is an index, otherwise all blocks."""
+    index = _open_index(args)
+    if index is None:
+        yield reader
+        return
+    try:
+        yield index.blocks(intervals)
+    finally:
+        index.close()
+
+
+def _read_intervals(args: argparse.Namespace, stranded: bool) -> list[Interval]:
     with open_input(args.bed) as handle:
-        intervals = read_bed(handle, args.bed)
+        return read_bed(handle, args.bed, stranded)
+
+
+def _select(args: argparse.Namespace, reader: MafReader) -> None:
+    intervals = _read_intervals(args, args.stranded)
     stats: Counter = Counter()
     left, right = args.left_flank, args.right_flank
-    blocks: Iterable[Block] = reader
-    index = _open_index(args)
-    if index is not None:
-        blocks = index.blocks(widen(intervals, left, right))
-    written = _write(args, select_blocks(blocks, intervals, left, right, stats), reader)
-    if index is not None:
-        index.close()
+    with _blocks_near(args, reader, widen(intervals, left, right)) as blocks:
+        selected = select_blocks(blocks, intervals, left, right, stats, args.stranded)
+        written = _write(args, selected, reader)
     _note(f"{written} blocks written; {stats['matched']} of {stats['intervals']} intervals matched")
+
+
+def _stitched_lines(feature: Stitched, prefix: str = "") -> Iterator[str]:
+    for species, text in feature.texts.items():
+        yield from fasta_record(f"{prefix}{species} {feature.location}", text)
+
+
+def _stitch(args: argparse.Namespace, reader: MafReader) -> None:
+    intervals = widen(_read_intervals(args, True), args.left_flank, args.right_flank)
+    stats: Counter = Counter()
+    with _blocks_near(args, reader, intervals) as blocks:
+        features = stitch(blocks, intervals, stats)
+        if args.directory is None:
+            _write_lines(args, (
+                line for f in features for line in _stitched_lines(f, f"{f.name}|")
+            ))
+        else:
+            os.makedirs(args.directory, exist_ok=True)
+            found = list(features)
+            for feature, name in zip(found, file_names(f.name for f in found)):
+                args.output = os.path.join(args.directory, name + ".fa")
+                _write_lines(args, _stitched_lines(feature))
+    _note(f"{stats['matched']} of {stats['intervals']} intervals matched, "
+          f"{stats['partial']} only in part")
+    if stats["overlaps"]:
+        _note(f"warning: {stats['overlaps']} blocks overlap others on the reference and were cut")
+    if stats["duplicates"]:
+        _note(f"warning: {stats['duplicates']} additional rows of a species in the same block "
+              "not used (see dedup)")
 
 
 def _species(args: argparse.Namespace, reader: MafReader) -> None:
@@ -276,12 +323,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     command("index", _index, "Index an uncompressed MAF file to speed up select.", output=())
 
+    def regions(sub):
+        sub.add_argument("-b", "--bed", required=True, metavar="FILE", help="regions to extract")
+        sub.add_argument("-l", "--left-flank", type=_at_least(0), default=0, metavar="N",
+                         help="extend regions to the left by this many nucleotides")
+        sub.add_argument("-r", "--right-flank", type=_at_least(0), default=0, metavar="N",
+                         help="extend regions to the right by this many nucleotides")
+
     sub = command("select", _select, "Extract regions given in a BED file.")
-    sub.add_argument("-b", "--bed", required=True, metavar="FILE", help="regions to extract")
-    sub.add_argument("-l", "--left-flank", type=_at_least(0), default=0, metavar="N",
-                     help="extend regions to the left by this many nucleotides")
-    sub.add_argument("-r", "--right-flank", type=_at_least(0), default=0, metavar="N",
-                     help="extend regions to the right by this many nucleotides")
+    regions(sub)
+    sub.add_argument("-s", "--stranded", action="store_true",
+                     help="reverse-complement blocks to the strand given in the BED file")
+
+    sub = command("stitch", _stitch, "Write one FASTA alignment for every region in a BED file.")
+    regions(sub)
+    sub.add_argument("-d", "--directory", metavar="DIR",
+                     help="write one file per region into this directory")
 
     defaults = FilterCriteria()
     sub = command("filter", _filter, "Keep blocks that meet all criteria.")
@@ -367,6 +424,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "window" and args.step > args.length:
         parser.error("--step must not exceed --length")
+    if args.command == "stitch" and args.output and args.directory:
+        parser.error("--output cannot be combined with --directory")
     if args.command == "verify" and not (args.genome or args.directory):
         parser.error("verify needs --genome or --directory")
     if args.command == "species" and args.exclude and (args.reorder or args.require_all):

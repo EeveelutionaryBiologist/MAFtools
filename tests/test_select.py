@@ -54,6 +54,19 @@ def test_flanks(oracle):
     assert part.reference.plus_interval() == (1045, 1067)
 
 
+@pytest.mark.parametrize("strand", "+-.")
+def test_stranded(oracle, strand):
+    for _ in range(10):
+        block = oracle.random_block()
+        lo, hi = block.reference.plus_interval()
+        interval = Interval("chr1", lo + 10, hi - 20, "x", strand)
+        (part,) = select_blocks([block], [interval], stranded=True)
+        (plain,) = select_blocks([block], [interval])
+        oracle.check(part)
+        assert part.reference.strand == (block.reference.strand if strand == "." else strand)
+        assert [r.plus_interval() for r in part.rows] == [r.plus_interval() for r in plain.rows]
+
+
 def test_no_overlap(oracle):
     block = Block([oracle.row(0, 1000, "x" * 100)])
     assert select(block, 900, 1000) == [] and select(block, 1100, 1200) == []
@@ -88,13 +101,25 @@ def test_index_agrees_with_brute_force(oracle):
     for _ in range(50):
         lo = rng.randrange(2000)
         hi = lo + rng.randrange(1, 200)
-        want = [(i, s, e) for i, (_, s, e) in enumerate(ivs) if max(s, lo) < min(e, hi)]
+        want = [(i, s, e) for i, (_, s, e, *_) in enumerate(ivs) if max(s, lo) < min(e, hi)]
         assert index.overlapping("c", lo, hi) == want
 
 
 def test_bed_parsing():
     text = "# c\ntrack name=x\nbrowser position\n\nchr1\t5\t9\tname\t0\t-\n"
-    assert read_bed(StringIO(text)) == [Interval("chr1", 5, 9)]
+    assert read_bed(StringIO(text)) == [Interval("chr1", 5, 9, "name", "-")]
+    assert read_bed(StringIO("chr1\t5\t9\n")) == [Interval("chr1", 5, 9, "", ".")]
+    assert read_bed(StringIO("chr1 5 9 n 0 +\n")) == [Interval("chr1", 5, 9, "n", "+")]
+    assert read_bed(StringIO("chr1\t5\t9\t.\t-\n")) == [Interval("chr1", 5, 9, ".", "-")]
+    assert read_bed(StringIO("chr1\t5\t9\t.\t100\n"), stranded=True)[0].strand == "."
+    assert read_bed(StringIO("chr1\t5\t9\tn\t-\t+\n"))[0].strand == "+"
+    spaced = "track name=a b\tc\nchr1\t5\t9\tmy gene\t0\t-\n\t\n"
+    assert read_bed(StringIO(spaced), stranded=True) == [Interval("chr1", 5, 9, "my gene", "-")]
+    for odd in ("1", "", "x"):
+        line = f"chr1\t5\t9\tn\t0\t{odd}\tmore\n"
+        assert read_bed(StringIO(line))[0].strand == "."
+        with pytest.raises(MafError, match="<bed>:1: invalid strand"):
+            read_bed(StringIO(line), stranded=True)
     for bad in ("chr1\t5\n", "chr1\tx\t9\n", "chr1\t9\t5\n", "chr1\t-1\t5\n"):
         with pytest.raises(MafError, match="<bed>:1"):
             read_bed(StringIO(bad))

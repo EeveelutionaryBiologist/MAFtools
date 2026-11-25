@@ -34,6 +34,7 @@ Rewritten as a package with a test suite. No dependencies.
 - `index`: random access for `select`.
 - `verify`: checks alignments against genome sequences.
 - `thin`: limits the number of sequences, aiming for a mean pairwise identity.
+- `stitch`: one FASTA alignment per BED region. `select --stranded`.
 - Gzipped input and output, and standard input.
 
 ### Changed

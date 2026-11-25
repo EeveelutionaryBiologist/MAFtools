@@ -30,7 +30,7 @@ Without installing, use `python MAFtools.py` from a checkout in place of `maftoo
 maftools [program] [options] [MAF file]
 ```
 
-Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `thin`, `window`, `merge`, `toBed`, `toFasta`, `verify`
+Where `program` is one of: `describe`, `blockdescribe`, `select`, `stitch`, `index`, `filter`, `species`, `dedup`, `thin`, `window`, `merge`, `toBed`, `toFasta`, `verify`
 
 Results go to standard output unless `-o` is given; an existing output file is replaced.
 Input may be gzipped, and `-` reads from standard input, so commands can be piped.
@@ -63,6 +63,7 @@ maftools select -b regions.bed -o extracted.maf alignment.maf
 - `-b, --bed`: BED file with coordinates to extract (required)
 - `-r, --right-flank`: Add nucleotides to the right side of each coordinate (default: 0)
 - `-l, --left-flank`: Add nucleotides to the left side of each coordinate (default: 0)
+- `-s, --stranded`: Reverse-complement blocks to the strand given in the BED file
 - `-o, --output`: Output MAF file (default: standard output)
 
 **Example:** If a BED entry is `species1 1560 1960` and a MAF block starts at position 1500 with length 500, the program extracts the overlapping region (positions 1560-1960).
@@ -72,7 +73,7 @@ maftools select -b regions.bed -o extracted.maf alignment.maf
   Versioned accessions such as `NC_037638.1` must be given in full.
 - Sequences without any base in the region are left out.
 - Insertions relative to the reference stay with the preceding reference base.
-- The BED strand column is ignored; flanks refer to the plus strand.
+- The BED strand column is ignored without `--stranded`. Flanks always refer to the plus strand.
 
 ### 3. filter
 Filters MAF alignment blocks based on various criteria.
@@ -299,6 +300,30 @@ reference only; use `filter -n` afterwards to drop them.
 
 The approach follows `rnazWindow.pl` from the RNAz package, but the selected sequences can differ.
 
+### 14. stitch
+Writes one FASTA alignment for every region in a BED file, for example a gene or tRNA, put together from
+all blocks that overlap it.
+
+```bash
+maftools stitch -b genes.bed -d alignments/ alignment.maf
+```
+
+**Options:**
+- `-b, --bed`: BED file with regions (required)
+- `-r, --right-flank`, `-l, --left-flank`: As for `select`
+- `-d, --directory`: Write one file per region, named after the BED name or the position
+- `-o, --output`: Output FASTA file (default: standard output). Records are named `region|species`
+
+**Behavior:**
+- Without gaps, the reference has exactly the length of the region. Positions without an alignment are
+  `N` in the reference and gaps in all other species.
+- Regions on the minus strand are reverse-complemented. The strand is read from column 6, or from column 5
+  of files with five columns.
+- Where blocks overlap on the reference, the one that starts first is used. If a species occurs more than
+  once in a block, its first sequence is used (see `dedup`).
+- Other species can come from several places in their genome, so there are no coordinates for them.
+- Exons in BED12 files are not used; a region is always one interval.
+
 ## Examples
 
 ### Extract specific genomic regions:
@@ -318,6 +343,11 @@ maftools filter -g 0.15 -n 3 -m 0.70 -o filtered.maf Example/test.maf
 ```bash
 # Create 100bp windows, each starting 25bp after the previous one
 maftools window -l 100 -s 25 -o windows.maf genome.maf
+```
+
+### Alignments of annotated RNAs:
+```bash
+maftools stitch -b Example/test.bed -d alignments Example/test.maf
 ```
 
 ### Prepare an RNA structure screen:
