@@ -33,6 +33,7 @@ Rewritten as a package with a test suite. No dependencies.
 - `toFasta`: aligned or ungapped FASTA, per block or concatenated by species.
 - `index`: random access for `select`.
 - `verify`: checks alignments against genome sequences.
+- `thin`: limits the number of sequences, aiming for a mean pairwise identity.
 - Gzipped input and output, and standard input.
 
 ### Changed

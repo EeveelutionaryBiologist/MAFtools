@@ -20,8 +20,9 @@ from .files import STDIO, open_input, open_output
 from .index import MafIndex, build_index, index_path
 from .mafio import MafError, MafReader, write_maf
 from .operations import (
-    KEEP_BEST, KEEP_FIRST, KEEP_NONE, FilterCriteria, MergeOptions, SpeciesOptions, dedup_blocks,
-    filter_blocks, merge_blocks, select_blocks, species_blocks, widen, window_blocks,
+    KEEP_BEST, KEEP_FIRST, KEEP_NONE, FilterCriteria, MergeOptions, SpeciesOptions, ThinOptions,
+    dedup_blocks, filter_blocks, merge_blocks, select_blocks, species_blocks, thin_blocks, widen,
+    window_blocks,
 )
 from .reports import bed_lines, block_table, describe, fasta_blocks, fasta_concatenated
 from .verify import HEADER, verify
@@ -174,6 +175,16 @@ def _filter(args: argparse.Namespace, reader: MafReader) -> None:
     _note(f"{stats['kept']} of {stats['read']} blocks passed")
 
 
+def _thin(args: argparse.Namespace, reader: MafReader) -> None:
+    options = ThinOptions(args.max_seqs, args.target_identity, args.max_identity)
+    stats: Counter = Counter()
+    _write(args, thin_blocks(reader, options, stats), reader)
+    _note(
+        f"{stats['thinned']} of {stats['read']} blocks thinned; "
+        f"{stats['removed']} sequences removed"
+    )
+
+
 def _window(args: argparse.Namespace, reader: MafReader) -> None:
     stats: Counter = Counter()
     _write(args, window_blocks(reader, args.length, args.step, stats), reader)
@@ -306,6 +317,15 @@ def build_parser() -> argparse.ArgumentParser:
                      "one, or none of them")
     sub.add_argument("-n", "--min-seqs", type=_at_least(1), default=1, metavar="N",
                      help="minimum number of sequences to write a block")
+
+    thin = ThinOptions()
+    sub = command("thin", _thin, "Reduce blocks to a few sequences of suitable similarity.")
+    sub.add_argument("-n", "--max-seqs", type=_at_least(1), default=thin.max_seqs, metavar="N",
+                     help="maximum number of sequences; the first one is always kept")
+    sub.add_argument("-t", "--target-identity", type=_fraction, default=thin.target_identity,
+                     metavar="F", help="pairwise identity to aim for when choosing sequences")
+    sub.add_argument("-x", "--max-identity", type=_fraction, default=thin.max_identity,
+                     metavar="F", help="drop sequences more similar than this to an earlier one")
 
     sub = command("window", _window, "Cut blocks into overlapping windows.")
     sub.add_argument("-l", "--length", type=_at_least(1), default=120, metavar="N",

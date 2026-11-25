@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 from .bed import Interval, IntervalIndex
 from .blocks import GAP, Block, Row, column_of_base
-from .metrics import mean_gap_fraction, pairwise_identity, reference_identities
+from .metrics import Encoded, mean_gap_fraction, pairwise_identity, reference_identities
 
 
 # --- select -----------------------------------------------------------------
@@ -202,6 +202,63 @@ def dedup_blocks(
             stats["removed"] += removed
             block = block.derived([block.rows[i] for i in kept]).without_gap_columns()
         stats["kept"] += 1
+        yield block
+
+
+# --- thin -------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ThinOptions:
+    max_seqs: int = 6
+    target_identity: float = 0.8
+    max_identity: float = 0.99
+
+
+def thin_rows(rows: list[Row], options: ThinOptions) -> list[int]:
+    """Indices of the rows to keep, in order. The first row is always kept.
+
+    First, rows that are more similar than ``max_identity`` to an earlier kept row
+    are removed. Then rows are added one by one to the first one, each time the row
+    that brings the pairwise identities of the selection closest to the target, by
+    mean squared deviation. Of equally good rows, the first one is taken.
+    """
+    texts = [Encoded(row.text) for row in rows]
+    candidates: list[int] = []
+    for i, text in enumerate(texts):
+        if i == 0 or all(
+            texts[j].identity(text) <= options.max_identity for j in candidates
+        ):
+            candidates.append(i)
+    if len(candidates) <= options.max_seqs:
+        return candidates
+
+    selected = [candidates.pop(0)]
+    # Sum of squared deviations between each candidate and the selected rows. All
+    # candidates add the same number of pairs, so the smallest sum is the best mean.
+    costs = dict.fromkeys(candidates, 0.0)
+    while len(selected) < options.max_seqs:
+        latest = texts[selected[-1]]
+        for i in costs:
+            costs[i] += (latest.identity(texts[i]) - options.target_identity) ** 2
+        best = min(costs, key=costs.__getitem__)
+        del costs[best]
+        selected.append(best)
+    return sorted(selected)
+
+
+def thin_blocks(
+    blocks: Iterable[Block], options: ThinOptions, stats: Counter | None = None
+) -> Iterator[Block]:
+    """Reduce blocks to a limited number of rows of suitable similarity."""
+    stats = Counter() if stats is None else stats
+    for block in blocks:
+        stats["read"] += 1
+        kept = thin_rows(block.rows, options)
+        removed = len(block.rows) - len(kept)
+        if removed:
+            stats["thinned"] += 1
+            stats["removed"] += removed
+            block = block.derived([block.rows[i] for i in kept]).without_gap_columns()
         yield block
 
 

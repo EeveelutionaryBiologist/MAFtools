@@ -30,7 +30,7 @@ Without installing, use `python MAFtools.py` from a checkout in place of `maftoo
 maftools [program] [options] [MAF file]
 ```
 
-Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `window`, `merge`, `toBed`, `toFasta`, `verify`
+Where `program` is one of: `describe`, `blockdescribe`, `select`, `index`, `filter`, `species`, `dedup`, `thin`, `window`, `merge`, `toBed`, `toFasta`, `verify`
 
 Results go to standard output unless `-o` is given; an existing output file is replaced.
 Input may be gzipped, and `-` reads from standard input, so commands can be piped.
@@ -278,6 +278,27 @@ Both options can be repeated. FASTA files must be uncompressed; a `.fai` index i
 `N` in the alignment stands for any base. The exit status is 0 if all checked sequences are correct,
 and 1 if there are problems or nothing could be checked.
 
+### 13. thin
+Reduces blocks to a limited number of sequences of suitable similarity, for programs such as RNAz that
+accept only a few sequences.
+
+```bash
+maftools thin -n 6 -t 0.8 -o thin.maf alignment.maf
+```
+
+**Options:**
+- `-n, --max-seqs`: Maximum number of sequences (default: 6)
+- `-t, --target-identity`: Pairwise identity to aim for (default: 0.8)
+- `-x, --max-identity`: Drop sequences more similar than this to an earlier one (default: 0.99)
+- `-o, --output`: Output MAF file (default: standard output)
+
+The reference is always kept. Near-identical sequences are dropped first. If too many remain, sequences
+are added to the reference one by one, each time the one that brings the pairwise identities closest to
+the target. Columns left without any base are removed. Very similar blocks can be left with the
+reference only; use `filter -n` afterwards to drop them.
+
+The approach follows `rnazWindow.pl` from the RNAz package, but the selected sequences can differ.
+
 ## Examples
 
 ### Extract specific genomic regions:
@@ -297,6 +318,13 @@ maftools filter -g 0.15 -n 3 -m 0.70 -o filtered.maf Example/test.maf
 ```bash
 # Create 100bp windows, each starting 25bp after the previous one
 maftools window -l 100 -s 25 -o windows.maf genome.maf
+```
+
+### Prepare an RNA structure screen:
+```bash
+# One sequence per species, windows of 120 columns, at most six sequences each
+maftools dedup genome.maf.gz | maftools window -l 120 -s 40 - | maftools thin -n 6 - \
+  | maftools filter -g 0.25 -n 3 -o screen.maf -
 ```
 
 ### Combine commands:
